@@ -6,10 +6,61 @@ import base64
 import json
 import jwt
 import datetime
+import sqlite3
 
 hostName = "localhost"
 serverPort = 8080
+DB_FILE = "totally_not_my_privateKeys.db" # Database filename
 
+# --- Database Initialization ---
+def init_db():
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS keys(
+                kid INTEGER PRIMARY KEY AUTOINCREMENT,
+                key BLOB NOT NULL,
+                exp INTEGER NOT NULL
+            )
+        ''')
+        conn.commit()
+        print("Database initialized successfully.")
+    except sqlite3.Error as e:
+        print(f"Error initializing database: {e}")
+    finally:
+        if conn:
+            conn.close()
+    # conn = sqlite3.connect(DB_FILE)
+    # cursor = conn.cursor()
+    # Create the keys table if it doesn't exist
+    # cursor.execute('''
+        # CREATE TABLE IF NOT EXISTS keys(
+            # kid INTEGER PRIMARY KEY AUTOINCREMENT,
+            # key BLOB NOT NULL,
+            # exp INTEGER NOT NULL
+        # )
+    # ''')
+    # conn.commit()
+    # conn.close()
+
+def save_key_to_db(key_pem, expires_at):
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO keys (key, exp) VALUES (?, ?)", (key_pem, expires_at))
+        conn.commit()
+        # Return the ID of the key we just saved
+        return cursor.lastrowid
+    except sqlite3.Error as e:
+        print(f"Failed to insert key into database: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+    
 private_key = rsa.generate_private_key(
     public_exponent=65537,
     key_size=2048,
@@ -31,7 +82,6 @@ expired_pem = expired_key.private_bytes(
 )
 
 numbers = private_key.private_numbers()
-
 
 def int_to_base64(value):
     """Convert an integer to a Base64URL-encoded string"""
@@ -73,8 +123,10 @@ class MyServer(BaseHTTPRequestHandler):
                 "kid": "goodKID"
             }
             token_payload = {
+                # "user": "username",
+                # "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
                 "user": "username",
-                "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+                "exp": int((datetime.datetime.utcnow() + datetime.timedelta(hours=1)).timestamp())
             }
             if 'expired' in params:
                 headers["kid"] = "expiredKID"
@@ -115,6 +167,16 @@ class MyServer(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+
+    # 1. Initialize the DB file and table
+    init_db()
+    
+    # 2. Store the keys generated at startup (Example usage)
+    future_exp = int((datetime.datetime.now() + datetime.timedelta(hours=1)).timestamp())
+    past_exp = int((datetime.datetime.now() - datetime.timedelta(hours=1)).timestamp())
+    save_key_to_db(pem, future_exp)
+    save_key_to_db(expired_pem, past_exp)
+    
     webServer = HTTPServer((hostName, serverPort), MyServer)
     try:
         webServer.serve_forever()
